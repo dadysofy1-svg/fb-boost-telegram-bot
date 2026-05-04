@@ -1,54 +1,93 @@
+"""
+keyboards.py
+كل لوحات مفاتيح البوت مع دعم ألوان الأزرار (style field)
+style values: "success" | "danger" | "primary"
+"""
+from __future__ import annotations
+from typing import Optional
+from pydantic import ConfigDict
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from states import AdObjectives
 
 
-# ==================== القائمة الرئيسية ====================
+# ─────────────────────────────────────────────────────
+#  StyledButton — يضيف حقل style للـ JSON النهائي
+#  (Telegram يتجاهل الحقول غير المعروفة بهدوء)
+# ─────────────────────────────────────────────────────
 
-def main_menu(gate_names: dict, subscribed: bool, support_url: str = 'https://t.me/') -> InlineKeyboardMarkup:
+class StyledButton(InlineKeyboardButton):
+    """InlineKeyboardButton مع حقل style اختياري."""
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    style: Optional[str] = None
+
+
+def _btn(text: str, *,
+         callback_data: Optional[str] = None,
+         url: Optional[str] = None,
+         style: Optional[str] = None,
+         **kw) -> StyledButton:
+    """اختصار لبناء زر مع style."""
+    kwargs: dict = {'text': text}
+    if callback_data is not None:
+        kwargs['callback_data'] = callback_data
+    if url is not None:
+        kwargs['url'] = url
+    if style is not None:
+        kwargs['style'] = style
+    kwargs.update(kw)
+    return StyledButton(**kwargs)
+
+
+# ══════════════════════════════════════════════════════
+#  القائمة الرئيسية
+# ══════════════════════════════════════════════════════
+
+def main_menu(gate_names: dict, subscribed: bool,
+              support_url: str = 'https://t.me/') -> InlineKeyboardMarkup:
     rows = []
     if subscribed:
-        gate_buttons = {
-            'standard_ad': '🟢 إعلان رابط بوست',
-            'dark_post':   '🔵 إعلان دارك بوست',
-            'partner_ship':'🟣 إعلان بارتنر شيب',
+        gate_styles = {
+            'standard_ad':  ('🟢 إعلان رابط بوست', 'success'),
+            'dark_post':    ('🔵 إعلان دارك بوست',  'primary'),
+            'partner_ship': ('🟣 إعلان بارتنر شيب', 'primary'),
         }
-        keys = [(k, gate_buttons.get(k, v)) for k, v in gate_names.items()]
-        for i in range(0, len(keys), 1):
-            k, v = keys[i]
-            rows.append([InlineKeyboardButton(text=v, callback_data=f'gate:{k}')])
-        rows.append([
-            InlineKeyboardButton(text='📊 إحصائياتي', callback_data='my_stats'),
-        ])
+        for k in gate_names:
+            label, sty = gate_styles.get(k, (gate_names[k], 'primary'))
+            rows.append([_btn(label, callback_data=f'gate:{k}', style=sty)])
+        rows.append([_btn('📊 إحصائياتي', callback_data='my_stats', style='primary')])
     else:
-        rows.append([
-            InlineKeyboardButton(text='🔒 غير مشترك — فعّل كودك أولاً', callback_data='redeem')
-        ])
+        rows.append([_btn('🔒 غير مشترك — فعّل كودك أولاً',
+                          callback_data='redeem', style='danger')])
     rows.append([
-        InlineKeyboardButton(text='🎟️ تفعيل كود Redeem', callback_data='redeem'),
-        InlineKeyboardButton(text='🛟 الدعم', url=support_url),
+        _btn('🎟️ تفعيل كود Redeem', callback_data='redeem', style='success'),
+        _btn('🛟 الدعم', url=support_url),
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# ==================== البروكسي ====================
+# ══════════════════════════════════════════════════════
+#  البروكسي
+# ══════════════════════════════════════════════════════
 
 def proxy_selection_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='🤖 اختيار تلقائي من القائمة', callback_data='proxy:auto')],
-        [InlineKeyboardButton(text='✏️  إدخال بروكسي يدوي',        callback_data='proxy:custom')],
-        [InlineKeyboardButton(text='⏭️  تخطي — بدون بروكسي',       callback_data='proxy:skip')],
-        [InlineKeyboardButton(text='🏠 القائمة الرئيسية',           callback_data='home')],
+        [_btn('🤖 اختيار تلقائي من القائمة', callback_data='proxy:auto',   style='primary')],
+        [_btn('✏️  إدخال بروكسي يدوي',        callback_data='proxy:custom', style='primary')],
+        [_btn('⏭️  تخطي — بدون بروكسي',       callback_data='proxy:skip',   style='primary')],
+        [_btn('🏠 القائمة الرئيسية',            callback_data='home',         style='danger')],
     ])
 
 
 def back_to_proxy() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='🔙 تغيير البروكسي', callback_data='proxy:back')],
-        [InlineKeyboardButton(text='🏠 القائمة الرئيسية', callback_data='home')],
+        [_btn('🔙 تغيير البروكسي',   callback_data='proxy:back', style='primary')],
+        [_btn('🏠 القائمة الرئيسية', callback_data='home',       style='danger')],
     ])
 
 
-# ==================== الأهداف ====================
+# ══════════════════════════════════════════════════════
+#  الأهداف
+# ══════════════════════════════════════════════════════
 
 def objective_selection_keyboard() -> InlineKeyboardMarkup:
     icons = {
@@ -66,127 +105,137 @@ def objective_selection_keyboard() -> InlineKeyboardMarkup:
         for obj in objs[i:i+2]:
             icon = icons.get(obj, '🎯')
             name = AdObjectives.get_display_name(obj).split('(')[0].strip()
-            row.append(InlineKeyboardButton(text=f'{icon} {name}', callback_data=f'objective:{obj}'))
+            row.append(_btn(f'{icon} {name}',
+                            callback_data=f'objective:{obj}', style='primary'))
         rows.append(row)
-    rows.append([InlineKeyboardButton(text='🏠 القائمة الرئيسية', callback_data='home')])
+    rows.append([_btn('🏠 القائمة الرئيسية', callback_data='home', style='danger')])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# ==================== تأكيد ====================
+# ══════════════════════════════════════════════════════
+#  تأكيد وتشغيل
+# ══════════════════════════════════════════════════════
 
 def confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text='✅ تأكيد وتشغيل', callback_data='confirm:yes'),
-            InlineKeyboardButton(text='❌ إلغاء',         callback_data='confirm:no'),
+            _btn('✅ تأكيد وتشغيل', callback_data='confirm:yes', style='success'),
+            _btn('❌ إلغاء',         callback_data='confirm:no',  style='danger'),
         ],
-        [InlineKeyboardButton(text='🏠 القائمة الرئيسية', callback_data='home')],
+        [_btn('🏠 القائمة الرئيسية', callback_data='home', style='danger')],
     ])
 
 
 def activate_or_back_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='🟢 نشر نشط',          callback_data='activate:run')],
-        [InlineKeyboardButton(text='⏸ نشر ثم إيقاف',     callback_data='activate:run_pause')],
-        [InlineKeyboardButton(text='🔙 العودة للقائمة',   callback_data='home')],
+        [_btn('🟢 نشر نشط',        callback_data='activate:run',       style='success')],
+        [_btn('⏸ نشر ثم إيقاف',   callback_data='activate:run_pause', style='danger')],
+        [_btn('🔙 العودة للقائمة', callback_data='home',               style='primary')],
     ])
 
 
+# ══════════════════════════════════════════════════════
+#  اختيار البوست
+# ══════════════════════════════════════════════════════
+
 def post_selection_keyboard(posts: list) -> InlineKeyboardMarkup:
-    """لوحة اختيار البوست من بوستات الصفحة"""
     rows = []
     for post in posts[:8]:
-        pid   = post.get('id', '')
-        short = post.get('id', '')
-        text  = post.get('message') or post.get('story') or ''
-        label = text[:45].replace('\n', ' ') if text else f"📄 بوست {short}"
-        rows.append([InlineKeyboardButton(text=f"📌 {label}", callback_data=f'post:{pid}')])
-    rows.append([InlineKeyboardButton(text='✏️ إدخال رابط/ID يدوي', callback_data='post:manual')])
-    rows.append([InlineKeyboardButton(text='🏠 القائمة الرئيسية',   callback_data='home')])
+        pid  = post.get('id', '')
+        text = post.get('message') or post.get('story') or ''
+        label = text[:45].replace('\n', ' ') if text else f"📄 بوست {pid}"
+        rows.append([_btn(f'📌 {label}', callback_data=f'post:{pid}', style='primary')])
+    rows.append([_btn('✏️ إدخال رابط/ID يدوي', callback_data='post:manual', style='primary')])
+    rows.append([_btn('🏠 القائمة الرئيسية',   callback_data='home',        style='danger')])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# ==================== الصورة ====================
+# ══════════════════════════════════════════════════════
+#  الصورة
+# ══════════════════════════════════════════════════════
 
 def image_received_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text='🔄 تغيير الصورة', callback_data='image:change'),
-            InlineKeyboardButton(text='⏭️ تخطي الصورة',  callback_data='image:skip'),
+            _btn('🔄 تغيير الصورة', callback_data='image:change', style='primary'),
+            _btn('⏭️ تخطي الصورة',  callback_data='image:skip',   style='primary'),
         ],
-        [InlineKeyboardButton(text='🏠 إلغاء', callback_data='home')],
+        [_btn('🏠 إلغاء', callback_data='home', style='danger')],
     ])
 
 
-# ==================== تنقل عام ====================
+# ══════════════════════════════════════════════════════
+#  تنقل عام
+# ══════════════════════════════════════════════════════
 
 def back_home() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='🏠 القائمة الرئيسية', callback_data='home')],
+        [_btn('🏠 القائمة الرئيسية', callback_data='home', style='primary')],
     ])
 
 
 def back_admin() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='🔙 لوحة التحكم', callback_data='admin:panel')],
+        [_btn('🔙 لوحة التحكم', callback_data='admin:panel', style='primary')],
     ])
 
 
-# ==================== لوحة تحكم الأدمن ====================
+# ══════════════════════════════════════════════════════
+#  لوحة تحكم الأدمن
+# ══════════════════════════════════════════════════════
 
 def admin_panel() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text='🎟️ توليد كود Redeem', callback_data='admin:gen_code'),
-            InlineKeyboardButton(text='📊 الإحصائيات',        callback_data='admin:stats'),
+            _btn('🎟️ توليد كود Redeem', callback_data='admin:gen_code',    style='success'),
+            _btn('📊 الإحصائيات',        callback_data='admin:stats',       style='primary'),
         ],
         [
-            InlineKeyboardButton(text='👤 إضافة/تمديد مشترك', callback_data='admin:set_user'),
-            InlineKeyboardButton(text='🗑️  حذف مشترك',         callback_data='admin:remove_user'),
+            _btn('👤 إضافة/تمديد مشترك', callback_data='admin:set_user',    style='success'),
+            _btn('🗑️  حذف مشترك',         callback_data='admin:remove_user', style='danger'),
         ],
         [
-            InlineKeyboardButton(text='📋 قائمة المشتركين',   callback_data='admin:list_users'),
-            InlineKeyboardButton(text='🎟️ عرض الأكواد',        callback_data='admin:list_codes'),
+            _btn('📋 قائمة المشتركين',   callback_data='admin:list_users',  style='primary'),
+            _btn('🎟️ عرض الأكواد',        callback_data='admin:list_codes',  style='primary'),
         ],
         [
-            InlineKeyboardButton(text='🌐 إضافة بروكسيات',    callback_data='admin:add_proxies'),
-            InlineKeyboardButton(text='🗂️  عرض البروكسيات',    callback_data='admin:list_proxies'),
+            _btn('🌐 إضافة بروكسيات',    callback_data='admin:add_proxies',  style='success'),
+            _btn('🗂️  عرض البروكسيات',    callback_data='admin:list_proxies', style='primary'),
         ],
         [
-            InlineKeyboardButton(text='📢 رسالة جماعية',      callback_data='admin:broadcast'),
-            InlineKeyboardButton(text='⚙️  إعدادات البوت',     callback_data='admin:settings'),
+            _btn('📢 رسالة جماعية',      callback_data='admin:broadcast', style='primary'),
+            _btn('⚙️  إعدادات البوت',     callback_data='admin:settings',  style='primary'),
         ],
-        [InlineKeyboardButton(text='🏠 خروج من لوحة التحكم', callback_data='home')],
+        [_btn('🏠 خروج من لوحة التحكم', callback_data='home', style='danger')],
     ])
 
 
 def admin_users_keyboard(users: list) -> InlineKeyboardMarkup:
     rows = []
     for u in users[:8]:
-        uid = u['user_id']
+        uid  = u['user_id']
         name = u['custom_name'] or u['first_name'] or f'user_{uid}'
-        sub = '🟢' if u['subscription_until'] else '🔴'
-        rows.append([InlineKeyboardButton(
-            text=f'{sub} {name} ({uid})',
-            callback_data=f'admin:user_info:{uid}'
-        )])
-    rows.append([InlineKeyboardButton(text='🔙 لوحة التحكم', callback_data='admin:panel')])
+        sub  = '🟢' if u['subscription_until'] else '🔴'
+        sty  = 'success' if u['subscription_until'] else 'danger'
+        rows.append([_btn(f'{sub} {name} ({uid})',
+                          callback_data=f'admin:user_info:{uid}', style=sty)])
+    rows.append([_btn('🔙 لوحة التحكم', callback_data='admin:panel', style='primary')])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def user_action_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text='➕ تمديد اشتراك',     callback_data=f'admin:extend:{user_id}'),
-            InlineKeyboardButton(text='🗑️ حذف',               callback_data=f'admin:del:{user_id}'),
+            _btn('➕ تمديد اشتراك', callback_data=f'admin:extend:{user_id}', style='success'),
+            _btn('🗑️ حذف',          callback_data=f'admin:del:{user_id}',    style='danger'),
         ],
-        [InlineKeyboardButton(text='🔙 قائمة المشتركين',    callback_data='admin:list_users')],
+        [_btn('🔙 قائمة المشتركين', callback_data='admin:list_users', style='primary')],
     ])
 
 
 def settings_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='✏️  تغيير اسم البوت',    callback_data='admin:set_botname')],
-        [InlineKeyboardButton(text='🔗 تغيير رابط الدعم',   callback_data='admin:set_support')],
-        [InlineKeyboardButton(text='🔙 لوحة التحكم',         callback_data='admin:panel')],
+        [_btn('✏️  تغيير اسم البوت',  callback_data='admin:set_botname', style='primary')],
+        [_btn('🔗 تغيير رابط الدعم', callback_data='admin:set_support', style='primary')],
+        [_btn('🔙 لوحة التحكم',       callback_data='admin:panel',       style='primary')],
     ])
