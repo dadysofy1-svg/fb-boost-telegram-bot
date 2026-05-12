@@ -326,12 +326,24 @@ async function loadCodes() {
   }).join('');
 }
 
+function maskProxy(p) {
+  if (p.includes('@')) {
+    const atIdx = p.indexOf('@');
+    const creds = p.substring(0, atIdx);
+    const rest  = p.substring(atIdx + 1);
+    const colon = creds.indexOf(':');
+    const user  = colon >= 0 ? creds.substring(0, colon) : creds;
+    return `${user}:****@${rest}`;
+  }
+  return p;
+}
+
 async function loadProxies() {
   const d = await api('/api/proxies');
   const list = d.proxies || [];
   document.getElementById('proxyCount').textContent = list.length;
   const el = document.getElementById('proxyList');
-  el.innerHTML = list.length ? list.map(p => `<div class="proxy-item">🌐 ${p}</div>`).join('') : '<div style="color:var(--muted);padding:8px">لا توجد بروكسيات</div>';
+  el.innerHTML = list.length ? list.map(p => `<div class="proxy-item">🌐 ${maskProxy(p)}</div>`).join('') : '<div style="color:var(--muted);padding:8px">لا توجد بروكسيات</div>';
 }
 
 async function generateCode() {

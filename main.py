@@ -59,6 +59,25 @@ dp  = Dispatcher(storage=MemoryStorage())
 #  Helpers
 # ──────────────────────────────────────────────
 
+def _mask_proxy(proxy: str) -> str:
+    """إخفاء كلمة مرور البروكسي: user:pass@host:port → user:****@host:port"""
+    if '@' in proxy:
+        creds, rest = proxy.split('@', 1)
+        if ':' in creds:
+            user = creds.split(':', 1)[0]
+            return f"{user}:****@{rest}"
+    return proxy
+
+
+async def _check_active_msg(call: CallbackQuery, state: FSMContext) -> bool:
+    """يتحقق أن الـ callback جاي من الرسالة الشغالة حالياً وليس رسالة قديمة."""
+    data = await state.get_data()
+    active = data.get('active_msg_id')
+    if active and call.message.message_id != active:
+        await call.answer('⚠️ هذه الخطوة انتهت، ابدأ من جديد.', show_alert=True)
+        return False
+    return True
+
 def menu_for(user_id: int):
     return main_menu(GATE_NAMES, is_subscribed(db.get_user(user_id)), SUPPORT_URL)
 
@@ -186,7 +205,9 @@ async def enter_gate(call: CallbackQuery, state: FSMContext):
     if not gate:
         await call.answer('البوابة غير موجودة.', show_alert=True)
         return
+    await state.clear()
     await gate.enter(call, state, {'gate_names': GATE_NAMES})
+    await state.update_data(active_msg_id=call.message.message_id)
     await call.answer()
 
 
@@ -196,6 +217,7 @@ async def enter_gate(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'proxy:auto', AdGateStates.waiting_proxy)
 async def proxy_auto(call: CallbackQuery, state: FSMContext):
+    if not await _check_active_msg(call, state): return
     data = await state.get_data()
     gate = GATES.get(data.get('gate_type'))
     if gate:
@@ -205,6 +227,7 @@ async def proxy_auto(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'proxy:skip', AdGateStates.waiting_proxy)
 async def proxy_skip(call: CallbackQuery, state: FSMContext):
+    if not await _check_active_msg(call, state): return
     data = await state.get_data()
     gate = GATES.get(data.get('gate_type'))
     if gate:
@@ -214,6 +237,7 @@ async def proxy_skip(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'proxy:custom', AdGateStates.waiting_proxy)
 async def proxy_custom_prompt(call: CallbackQuery, state: FSMContext):
+    if not await _check_active_msg(call, state): return
     await call.message.edit_text(
         '✏️ <b>أدخل البروكسي يدوياً:</b>\n\n'
         'الصيغة:\n'
@@ -226,6 +250,7 @@ async def proxy_custom_prompt(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'proxy:back', AdGateStates.waiting_cookies)
 async def proxy_back(call: CallbackQuery, state: FSMContext):
+    if not await _check_active_msg(call, state): return
     data = await state.get_data()
     gate = GATES.get(data.get('gate_type'))
     if gate:
@@ -299,21 +324,25 @@ async def days_input(m: Message, state: FSMContext):
 
 @dp.callback_query(F.data == 'image:skip')
 async def image_skip(call: CallbackQuery, state: FSMContext):
+    if not await _check_active_msg(call, state): return
     await _dispatch(state, 'handle_image_skip', call)
     await call.answer()
 
 @dp.callback_query(F.data == 'image:change')
 async def image_change(call: CallbackQuery, state: FSMContext):
+    if not await _check_active_msg(call, state): return
     await _dispatch(state, 'handle_image_back', call)
     await call.answer()
 
 @dp.callback_query(F.data.startswith('objective:'), AdGateStates.waiting_objective)
 async def objective_select(call: CallbackQuery, state: FSMContext):
+    if not await _check_active_msg(call, state): return
     await _dispatch(state, 'handle_objective', call)
     await call.answer()
 
 @dp.callback_query(F.data.in_(['confirm:yes', 'confirm:no']), AdGateStates.waiting_confirm)
 async def confirm_action(call: CallbackQuery, state: FSMContext):
+    if not await _check_active_msg(call, state): return
     await _dispatch(state, 'handle_confirm', call)
     await call.answer()
 
@@ -322,6 +351,7 @@ async def confirm_action(call: CallbackQuery, state: FSMContext):
     AdGateStates.waiting_activate
 )
 async def activate_action(call: CallbackQuery, state: FSMContext):
+    if not await _check_active_msg(call, state): return
     await _dispatch(state, 'handle_activate', call)
     await call.answer()
 
@@ -329,6 +359,7 @@ async def activate_action(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith('post:'), AdGateStates.waiting_post_select)
 async def post_select(call: CallbackQuery, state: FSMContext):
+    if not await _check_active_msg(call, state): return
     data = await state.get_data()
     gate = GATES.get(data.get('gate_type'))
     if gate and hasattr(gate, 'handle_post_select'):
@@ -623,7 +654,7 @@ async def admin_list_proxies(call: CallbackQuery):
     sample = proxies[:15]
     more   = len(proxies) - 15
     lines  = [f"🌐 <b>البروكسيات ({len(proxies)}):</b>\n"]
-    lines += [f"<code>{p}</code>" for p in sample]
+    lines += [f"<code>{_mask_proxy(p)}</code>" for p in sample]
     if more > 0:
         lines.append(f"\n<i>...و {more} بروكسي أخرى</i>")
     await call.message.edit_text("\n".join(lines), reply_markup=back_admin())
