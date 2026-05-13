@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -57,6 +58,9 @@ GATES = {
 bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode='HTML'))
 dp  = Dispatcher(storage=MemoryStorage())
 
+# ─── جدول الجلسات النشطة: user_id → session_token ───
+_sessions: dict[int, str] = {}
+
 
 # ──────────────────────────────────────────────
 #  Helpers
@@ -72,12 +76,23 @@ def _mask_proxy(proxy: str) -> str:
     return proxy
 
 
-async def _check_active_msg(call: CallbackQuery, state: FSMContext) -> bool:
-    """يتحقق أن الـ callback جاي من الرسالة الشغالة حالياً وليس رسالة قديمة."""
+def _new_session(user_id: int) -> str:
+    """ينشئ session token جديد للمستخدم ويحفظه في الجدول."""
+    tok = uuid.uuid4().hex[:10]
+    _sessions[user_id] = tok
+    return tok
+
+
+async def _check_session(call: CallbackQuery, state: FSMContext) -> bool:
+    """
+    يتحقق أن الـ callback جاي من الجلسة النشطة الحالية.
+    أي زر من جلسة قديمة (رسالة سابقة) يُحظر تلقائياً.
+    """
     data = await state.get_data()
-    active = data.get('active_msg_id')
-    if active and call.message.message_id != active:
-        await call.answer('⚠️ هذه الخطوة انتهت، ابدأ من جديد.', show_alert=True)
+    state_tok  = data.get('_session_tok')
+    global_tok = _sessions.get(call.from_user.id)
+    if state_tok and global_tok and state_tok != global_tok:
+        await call.answer('⚠️ هذه الجلسة انتهت. ابدأ من جديد.', show_alert=True)
         return False
     return True
 
@@ -132,6 +147,7 @@ async def start(message: Message, state: FSMContext):
 @dp.callback_query(F.data == 'home')
 async def home(call: CallbackQuery, state: FSMContext):
     await state.clear()
+    _sessions.pop(call.from_user.id, None)
     await send_home(call, call.from_user.id)
     await call.answer()
 
@@ -209,8 +225,9 @@ async def enter_gate(call: CallbackQuery, state: FSMContext):
         await call.answer('البوابة غير موجودة.', show_alert=True)
         return
     await state.clear()
+    tok = _new_session(call.from_user.id)
     await gate.enter(call, state, {'gate_names': GATE_NAMES})
-    await state.update_data(active_msg_id=call.message.message_id)
+    await state.update_data(_session_tok=tok)
     await call.answer()
 
 
@@ -220,7 +237,7 @@ async def enter_gate(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'proxy:auto', AdGateStates.waiting_proxy)
 async def proxy_auto(call: CallbackQuery, state: FSMContext):
-    if not await _check_active_msg(call, state): return
+    if not await _check_session(call, state): return
     data = await state.get_data()
     gate = GATES.get(data.get('gate_type'))
     if gate:
@@ -230,7 +247,7 @@ async def proxy_auto(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'proxy:skip', AdGateStates.waiting_proxy)
 async def proxy_skip(call: CallbackQuery, state: FSMContext):
-    if not await _check_active_msg(call, state): return
+    if not await _check_session(call, state): return
     data = await state.get_data()
     gate = GATES.get(data.get('gate_type'))
     if gate:
@@ -240,7 +257,7 @@ async def proxy_skip(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'proxy:custom', AdGateStates.waiting_proxy)
 async def proxy_custom_prompt(call: CallbackQuery, state: FSMContext):
-    if not await _check_active_msg(call, state): return
+    if not await _check_session(call, state): return
     await call.message.edit_text(
         '✏️ <b>أدخل البروكسي يدوياً:</b>\n\n'
         'الصيغة:\n'
@@ -253,7 +270,7 @@ async def proxy_custom_prompt(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'proxy:back', AdGateStates.waiting_cookies)
 async def proxy_back(call: CallbackQuery, state: FSMContext):
-    if not await _check_active_msg(call, state): return
+    if not await _check_session(call, state): return
     data = await state.get_data()
     gate = GATES.get(data.get('gate_type'))
     if gate:
@@ -327,25 +344,25 @@ async def days_input(m: Message, state: FSMContext):
 
 @dp.callback_query(F.data == 'image:skip')
 async def image_skip(call: CallbackQuery, state: FSMContext):
-    if not await _check_active_msg(call, state): return
+    if not await _check_session(call, state): return
     await _dispatch(state, 'handle_image_skip', call)
     await call.answer()
 
 @dp.callback_query(F.data == 'image:change')
 async def image_change(call: CallbackQuery, state: FSMContext):
-    if not await _check_active_msg(call, state): return
+    if not await _check_session(call, state): return
     await _dispatch(state, 'handle_image_back', call)
     await call.answer()
 
 @dp.callback_query(F.data.startswith('objective:'), AdGateStates.waiting_objective)
 async def objective_select(call: CallbackQuery, state: FSMContext):
-    if not await _check_active_msg(call, state): return
+    if not await _check_session(call, state): return
     await _dispatch(state, 'handle_objective', call)
     await call.answer()
 
 @dp.callback_query(F.data.in_(['confirm:yes', 'confirm:no']), AdGateStates.waiting_confirm)
 async def confirm_action(call: CallbackQuery, state: FSMContext):
-    if not await _check_active_msg(call, state): return
+    if not await _check_session(call, state): return
     await _dispatch(state, 'handle_confirm', call)
     await call.answer()
 
@@ -354,7 +371,7 @@ async def confirm_action(call: CallbackQuery, state: FSMContext):
     AdGateStates.waiting_activate
 )
 async def activate_action(call: CallbackQuery, state: FSMContext):
-    if not await _check_active_msg(call, state): return
+    if not await _check_session(call, state): return
     await _dispatch(state, 'handle_activate', call)
     await call.answer()
 
@@ -362,7 +379,7 @@ async def activate_action(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith('post:'), AdGateStates.waiting_post_select)
 async def post_select(call: CallbackQuery, state: FSMContext):
-    if not await _check_active_msg(call, state): return
+    if not await _check_session(call, state): return
     data = await state.get_data()
     gate = GATES.get(data.get('gate_type'))
     if gate and hasattr(gate, 'handle_post_select'):
@@ -424,8 +441,9 @@ async def tools_link_cb(call: CallbackQuery):
 @dp.callback_query(F.data == 'tool:bm_cards')
 async def bm_cards_start(call: CallbackQuery, state: FSMContext):
     await state.clear()
+    tok = _new_session(call.from_user.id)
     await state.set_state(BMToolStates.waiting_proxy)
-    await state.update_data(bm_active_msg=call.message.message_id)
+    await state.update_data(_session_tok=tok)
     await call.message.edit_text(
         "💳 <b>تسميع البطاقات BM</b>\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
