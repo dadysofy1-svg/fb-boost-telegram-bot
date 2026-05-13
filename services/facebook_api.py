@@ -323,21 +323,23 @@ class FacebookAPIClient:
                               image_path: str) -> Dict[str, Any]:
         """
         رفع صورة إلى Marketing API (act_{id}/adimages) وإرجاع image_hash.
-        يعمل مع الكوكيز مباشرةً لأنه endpoint إعلاني وليس Graph عادي.
+        Facebook يقبل multipart upload مع اسم الملف كـ field name.
         """
-        import base64
+        import os
         with open(image_path, 'rb') as f:
-            image_b64 = base64.b64encode(f.read()).decode()
+            image_data = f.read()
 
+        filename = os.path.basename(image_path) or 'image.jpg'
+
+        # Facebook adimages API: field name = filename, value = raw bytes
         result = await self._request(
             'POST', f'act_{ad_account_id}/adimages',
-            data={'bytes': image_b64},
+            files={filename: (filename, image_data, 'image/jpeg')},
         )
         if not result['success']:
             return result
 
         images = result['data'].get('images', {})
-        # المفتاح الأول هو hash الصورة
         for _name, info in images.items():
             img_hash = info.get('hash')
             if img_hash:
