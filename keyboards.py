@@ -45,19 +45,20 @@ def _btn(text: str, *,
 def main_menu(gate_names: dict, subscribed: bool,
               support_url: str = 'https://t.me/') -> InlineKeyboardMarkup:
     rows = []
+    gate_styles = {
+        'standard_ad':  ('🟢 إعلان رابط بوست', 'success'),
+        'dark_post':    ('🔵 إعلان دارك بوست',  'primary'),
+        'partner_ship': ('🟣 إعلان بارتنر شيب', 'primary'),
+    }
+    for k in gate_names:
+        label, sty = gate_styles.get(k, (gate_names[k], 'primary'))
+        rows.append([_btn(label, callback_data=f'gate:{k}', style=sty)])
+
     if subscribed:
-        gate_styles = {
-            'standard_ad':  ('🟢 إعلان رابط بوست', 'success'),
-            'dark_post':    ('🔵 إعلان دارك بوست',  'primary'),
-            'partner_ship': ('🟣 إعلان بارتنر شيب', 'primary'),
-        }
-        for k in gate_names:
-            label, sty = gate_styles.get(k, (gate_names[k], 'primary'))
-            rows.append([_btn(label, callback_data=f'gate:{k}', style=sty)])
         rows.append([_btn('📊 إحصائياتي', callback_data='my_stats', style='primary')])
     else:
-        rows.append([_btn('🔒 غير مشترك — فعّل كودك أولاً',
-                          callback_data='redeem', style='danger')])
+        rows.append([_btn('🔒 لم تفعل الاشتراك بعد — فعّل كود Redeem', callback_data='redeem', style='danger')])
+
     rows.append([_btn('🛠️ الأدوات', callback_data='tools:menu', style='primary')])
     rows.append([
         _btn('🎟️ تفعيل كود Redeem', callback_data='redeem', style='success'),
@@ -96,12 +97,19 @@ def ad_tools_menu(gate_names: dict, subscribed: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def link_tools_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [_btn('💳 تسميع البطاقات BM',       callback_data='tool:bm_cards', style='success')],
-        [_btn('🔗 ربط بايبال',              callback_data='tool:paypal',   style='primary')],
-        [_btn('🔙 الأدوات',                 callback_data='tools:menu',    style='primary')],
-    ])
+def link_tools_menu(subscribed: bool) -> InlineKeyboardMarkup:
+    rows = []
+    if subscribed:
+        rows.extend([
+            [_btn('💳 تسميع البطاقات BM',       callback_data='tool:bm_cards', style='success')],
+            [_btn('🔗 ربط بايبال',              callback_data='tool:paypal',   style='primary')],
+        ])
+    else:
+        rows.append([
+            _btn('🔒 هذه الأدوات للمشتركين فقط', callback_data='redeem', style='danger')
+        ])
+    rows.append([_btn('🔙 الأدوات', callback_data='tools:menu', style='primary')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def bm_card_select_keyboard(cards: list, selected: list) -> InlineKeyboardMarkup:

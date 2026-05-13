@@ -30,7 +30,7 @@ from gates.standard_ad_gate import StandardAdGate
 from gates.dark_post_gate import DarkPostGate
 from gates.partner_ship_gate import PartnerShipGate
 
-TOKEN        = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+TOKEN        = ('8709244199:AAGtMXpqXVtj3KHCkcEnxa8rk3WS6KIOR1M')
 ADMIN_PASS   = 'Nemo@1986'
 ADMIN_CMD    = 'beshoy'
 BOT_NAME     = os.environ.get('BOT_NAME',    '⚡ FB Boost Bot')
@@ -345,21 +345,29 @@ async def days_input(m: Message, state: FSMContext):
 
 @dp.callback_query(F.data == 'image:skip')
 async def image_skip(call: CallbackQuery, state: FSMContext):
+    if not await _check_session(call, state):
+        return
     await _dispatch(state, 'handle_image_skip', call)
     await call.answer()
 
 @dp.callback_query(F.data == 'image:change')
 async def image_change(call: CallbackQuery, state: FSMContext):
+    if not await _check_session(call, state):
+        return
     await _dispatch(state, 'handle_image_back', call)
     await call.answer()
 
 @dp.callback_query(F.data.startswith('objective:'), AdGateStates.waiting_objective)
 async def objective_select(call: CallbackQuery, state: FSMContext):
+    if not await _check_session(call, state):
+        return
     await _dispatch(state, 'handle_objective', call)
     await call.answer()
 
 @dp.callback_query(F.data.in_(['confirm:yes', 'confirm:no']), AdGateStates.waiting_confirm)
 async def confirm_action(call: CallbackQuery, state: FSMContext):
+    if not await _check_session(call, state):
+        return
     await _dispatch(state, 'handle_confirm', call)
     await call.answer()
 
@@ -368,6 +376,8 @@ async def confirm_action(call: CallbackQuery, state: FSMContext):
     AdGateStates.waiting_activate
 )
 async def activate_action(call: CallbackQuery, state: FSMContext):
+    if not await _check_session(call, state):
+        return
     await _dispatch(state, 'handle_activate', call)
     await call.answer()
 
@@ -375,6 +385,8 @@ async def activate_action(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith('post:'), AdGateStates.waiting_post_select)
 async def post_select(call: CallbackQuery, state: FSMContext):
+    if not await _check_session(call, state):
+        return
     data = await state.get_data()
     gate = GATES.get(data.get('gate_type'))
     if gate and hasattr(gate, 'handle_post_select'):
@@ -421,10 +433,12 @@ async def tools_ads_cb(call: CallbackQuery):
 
 @dp.callback_query(F.data == 'tools:link')
 async def tools_link_cb(call: CallbackQuery):
+    row = db.get_user(call.from_user.id)
+    sub = is_subscribed(row)
     await call.message.edit_text(
         "🔗 <b>أدوات ربط و تسميع</b>\n\n"
-        "اختر الأداة:",
-        reply_markup=link_tools_menu()
+        + ("اختر الأداة:" if sub else "❌ هذه الأدوات للمشتركين فقط. فعّل كودك أولاً."),
+        reply_markup=link_tools_menu(sub)
     )
     await call.answer()
 
@@ -435,10 +449,14 @@ async def tools_link_cb(call: CallbackQuery):
 
 @dp.callback_query(F.data == 'tool:bm_cards')
 async def bm_cards_start(call: CallbackQuery, state: FSMContext):
+    row = db.get_user(call.from_user.id)
+    if not is_subscribed(row):
+        await call.answer('❌ هذه الأداة للمشتركين فقط. فعّل كود Redeem أولاً.', show_alert=True)
+        return
     await state.clear()
     tok = _new_session(call.from_user.id)
     await state.set_state(BMToolStates.waiting_proxy)
-    await state.update_data(_session_tok=tok)
+    await state.update_data(_session_tok=tok, active_msg_id=call.message.message_id)
     await call.message.edit_text(
         "💳 <b>تسميع البطاقات BM</b>\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -458,6 +476,8 @@ async def bm_cards_start(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'bm:proxy:auto', BMToolStates.waiting_proxy)
 async def bm_proxy_auto(call: CallbackQuery, state: FSMContext):
+    if not await _check_session(call, state):
+        return
     proxy = proxy_manager.choose()
     if not proxy:
         await call.answer("⚠️ لا توجد بروكسيات متاحة في القائمة", show_alert=True)
@@ -477,6 +497,8 @@ async def bm_proxy_auto(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'bm:proxy:skip', BMToolStates.waiting_proxy)
 async def bm_proxy_skip(call: CallbackQuery, state: FSMContext):
+    if not await _check_session(call, state):
+        return
     await state.update_data(bm_proxy=None)
     await state.set_state(BMToolStates.waiting_cookies)
     await call.message.edit_text(
@@ -490,6 +512,8 @@ async def bm_proxy_skip(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'bm:proxy:custom', BMToolStates.waiting_proxy)
 async def bm_proxy_custom_prompt(call: CallbackQuery, state: FSMContext):
+    if not await _check_session(call, state):
+        return
     await state.set_state(BMToolStates.waiting_proxy)
     await call.message.edit_text(
         "✏️ <b>أدخل البروكسي يدوياً:</b>\n\n"
@@ -610,6 +634,8 @@ async def bm_ad_id_input(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith('bm:card:'), BMToolStates.waiting_card_sel)
 async def bm_card_toggle(call: CallbackQuery, state: FSMContext):
+    if not await _check_session(call, state):
+        return
     idx = int(call.data.split(':')[2])
     data = await state.get_data()
     cards    = data.get('bm_cards', [])
@@ -634,6 +660,8 @@ async def bm_card_toggle(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'bm:select_all', BMToolStates.waiting_card_sel)
 async def bm_select_all(call: CallbackQuery, state: FSMContext):
+    if not await _check_session(call, state):
+        return
     data = await state.get_data()
     cards    = data.get('bm_cards', [])
     selected = [c.get('credential_id', '') for c in cards]
@@ -646,6 +674,8 @@ async def bm_select_all(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == 'bm:confirm_cards', BMToolStates.waiting_card_sel)
 async def bm_confirm_cards(call: CallbackQuery, state: FSMContext):
+    if not await _check_session(call, state):
+        return
     data = await state.get_data()
     selected = data.get('bm_selected', [])
     if not selected:
@@ -735,10 +765,14 @@ async def bm_interval_input(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == 'tool:paypal')
 async def tool_paypal(call: CallbackQuery):
+    row = db.get_user(call.from_user.id)
+    if not is_subscribed(row):
+        await call.answer('❌ هذه الأداة للمشتركين فقط. فعّل كود Redeem أولاً.', show_alert=True)
+        return
     await call.message.edit_text(
         "🔗 <b>ربط بايبال</b>\n\n"
         "⏳ هذه الأداة قيد التطوير وستكون متاحة قريباً.",
-        reply_markup=link_tools_menu()
+        reply_markup=link_tools_menu(True)
     )
     await call.answer()
 

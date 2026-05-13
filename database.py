@@ -63,8 +63,12 @@ class DB:
     def set_subscription_hours(self, user_id: int, hours: int):
         until = datetime.utcnow() + timedelta(hours=hours)
         self.conn.execute(
-            'UPDATE users SET subscription_until=?, is_removed=0 WHERE user_id=?',
-            (until.isoformat(timespec='seconds'), user_id)
+            '''INSERT INTO users(user_id, username, first_name, joined_at, is_removed, subscription_until)
+               VALUES(?,?,?,?,0,?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                   subscription_until=excluded.subscription_until,
+                   is_removed=0''',
+            (user_id, '', '', self.now(), until.isoformat(timespec='seconds'))
         )
         self.conn.commit()
         return until
