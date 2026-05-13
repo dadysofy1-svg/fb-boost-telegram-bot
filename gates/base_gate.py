@@ -156,7 +156,7 @@ class BaseGate(ABC):
         file_name = f"{self.gate_id}_{message.from_user.id}_{message.message_id}.jpg"
         file_path = TEMP_DIR / file_name
         try:
-            await message.bot.download(destination=file_path, file_id=photo.file_id)
+            await message.bot.download(file=photo.file_id, destination=file_path)
         except Exception as e:
             return False, f"❌ فشل تحميل الصورة: {str(e)}", None
         is_valid, error = self.validate_image_size(str(file_path))
