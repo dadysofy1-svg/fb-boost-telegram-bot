@@ -12,6 +12,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 
+from config import BANNER_IMAGE_URL
 from database import DB, is_subscribed
 from keyboards import (
     main_menu, admin_panel, back_home, back_admin,
@@ -100,7 +101,63 @@ def menu_for(user_id: int):
     return main_menu(GATE_NAMES, is_subscribed(db.get_user(user_id)), SUPPORT_URL)
 
 
-async def send_home(msg_or_call, user_id: int):
+# ──────────────────────────────────────────────
+#  Banner helpers
+# ──────────────────────────────────────────────
+
+async def send_banner(chat_id: int, state: FSMContext) -> int:
+    """
+    Sends the banner image once per session and stores its message_id in state.
+    If a banner_msg_id already exists in state, the existing banner is reused
+    (no new photo is sent).  Returns the banner message_id.
+    """
+    data = await state.get_data()
+    existing = data.get('banner_msg_id')
+    if existing:
+        return existing
+    try:
+        banner_msg = await bot.send_photo(chat_id, photo=BANNER_IMAGE_URL)
+        banner_msg_id = banner_msg.message_id
+    except Exception:
+        # If the image cannot be sent (bad URL, network error, etc.) we
+        # continue without a banner so the bot stays functional.
+        banner_msg_id = None
+    await state.update_data(banner_msg_id=banner_msg_id)
+    return banner_msg_id
+
+
+async def edit_text_msg(
+    chat_id: int,
+    state: FSMContext,
+    text: str,
+    reply_markup=None,
+) -> int:
+    """
+    Edits the stored text message (text_msg_id) in place.
+    If no text message exists yet, sends a new one and stores its id.
+    Returns the message_id of the (possibly new) text message.
+    """
+    data = await state.get_data()
+    text_msg_id = data.get('text_msg_id')
+    if text_msg_id:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=text_msg_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode='HTML',
+            )
+            return text_msg_id
+        except Exception:
+            # Message may have been deleted or is too old — fall through to send
+            pass
+    msg = await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode='HTML')
+    await state.update_data(text_msg_id=msg.message_id)
+    return msg.message_id
+
+
+async def send_home(msg_or_call, user_id: int, state: FSMContext = None):
     row       = db.get_user(user_id)
     subscribed = is_subscribed(row)
     name      = (row['custom_name'] or row['first_name'] or 'مستخدم') if row else 'مستخدم'
@@ -123,10 +180,23 @@ async def send_home(msg_or_call, user_id: int):
         "اختر بوابة الإعلان من الأزرار أدناه 👇"
     )
     kb = menu_for(user_id)
+
+    # Determine chat_id regardless of whether we got a Message or CallbackQuery
     if isinstance(msg_or_call, CallbackQuery):
-        await msg_or_call.message.edit_text(txt, reply_markup=kb)
+        chat_id = msg_or_call.message.chat.id
     else:
-        await msg_or_call.answer(txt, reply_markup=kb)
+        chat_id = msg_or_call.chat.id
+
+    if state:
+        # Send (or reuse) the fixed banner above the text message
+        await send_banner(chat_id, state)
+        await edit_text_msg(chat_id, state, txt, reply_markup=kb)
+    else:
+        # Fallback when no state context is available (shouldn't normally happen)
+        if isinstance(msg_or_call, CallbackQuery):
+            await msg_or_call.message.edit_text(txt, reply_markup=kb)
+        else:
+            await msg_or_call.answer(txt, reply_markup=kb)
 
 
 # ──────────────────────────────────────────────
@@ -141,14 +211,19 @@ async def start(message: Message, state: FSMContext):
         message.from_user.username or '',
         message.from_user.first_name or ''
     )
-    await send_home(message, message.from_user.id)
+    await send_home(message, message.from_user.id, state)
 
 
 @dp.callback_query(F.data == 'home')
 async def home(call: CallbackQuery, state: FSMContext):
+    # Preserve banner across state.clear() so it stays pinned at the top
+    prev_data = await state.get_data()
+    banner_msg_id = prev_data.get('banner_msg_id')
     await state.clear()
+    if banner_msg_id:
+        await state.update_data(banner_msg_id=banner_msg_id)
     _sessions.pop(call.from_user.id, None)
-    await send_home(call, call.from_user.id)
+    await send_home(call, call.from_user.id, state)
     await call.answer()
 
 
@@ -157,13 +232,15 @@ async def home(call: CallbackQuery, state: FSMContext):
 # ──────────────────────────────────────────────
 
 @dp.callback_query(F.data == 'my_stats')
-async def my_stats(call: CallbackQuery):
+async def my_stats(call: CallbackQuery, state: FSMContext):
     row = db.get_user(call.from_user.id)
     name = (row['custom_name'] or row['first_name'] or 'مستخدم') if row else 'مستخدم'
     sub = row['subscription_until'] if row else None
     joined = row['joined_at'] if row else '—'
     sub_text = sub if sub else '❌ بدون اشتراك'
-    await call.message.edit_text(
+    await edit_text_msg(
+        call.message.chat.id,
+        state,
         f"📊 <b>إحصائياتك</b>\n\n"
         f"👤 الاسم: <b>{name}</b>\n"
         f"🆔 ID: <code>{call.from_user.id}</code>\n"
@@ -181,7 +258,9 @@ async def my_stats(call: CallbackQuery):
 @dp.callback_query(F.data == 'redeem')
 async def redeem_start(call: CallbackQuery, state: FSMContext):
     await state.set_state(UserFlow.waiting_redeem)
-    await call.message.edit_text(
+    await edit_text_msg(
+        call.message.chat.id,
+        state,
         "🎟️ <b>تفعيل كود Redeem</b>\n\nأرسل كود التفعيل الآن:",
         reply_markup=back_home()
     )
@@ -199,8 +278,18 @@ async def redeem_code(message: Message, state: FSMContext):
         )
         return
     until = db.set_subscription_hours(message.from_user.id, hours)
+    # Preserve banner across state.clear()
+    prev_data = await state.get_data()
+    banner_msg_id = prev_data.get('banner_msg_id')
+    text_msg_id   = prev_data.get('text_msg_id')
     await state.clear()
-    await message.answer(
+    if banner_msg_id:
+        await state.update_data(banner_msg_id=banner_msg_id)
+    if text_msg_id:
+        await state.update_data(text_msg_id=text_msg_id)
+    await edit_text_msg(
+        message.chat.id,
+        state,
         f"🎉 <b>تم تفعيل الاشتراك بنجاح!</b>\n\n"
         f"⏳ صالح حتى (UTC):\n<code>{until.isoformat(timespec='seconds')}</code>\n\n"
         f"مدة الاشتراك: <b>{hours} ساعة</b>",
@@ -224,7 +313,15 @@ async def enter_gate(call: CallbackQuery, state: FSMContext):
     if not gate:
         await call.answer('البوابة غير موجودة.', show_alert=True)
         return
+    # Preserve banner/text message IDs across state.clear()
+    prev_data = await state.get_data()
+    banner_msg_id = prev_data.get('banner_msg_id')
+    text_msg_id   = prev_data.get('text_msg_id')
     await state.clear()
+    if banner_msg_id:
+        await state.update_data(banner_msg_id=banner_msg_id)
+    if text_msg_id:
+        await state.update_data(text_msg_id=text_msg_id)
     _new_session(call.from_user.id)
     await gate.enter(call, state, {'gate_names': GATE_NAMES})
     # active_msg_id يُستخدم للتحقق من proxy buttons فقط
@@ -259,7 +356,9 @@ async def proxy_skip(call: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == 'proxy:custom', AdGateStates.waiting_proxy)
 async def proxy_custom_prompt(call: CallbackQuery, state: FSMContext):
     if not await _check_session(call, state): return
-    await call.message.edit_text(
+    await edit_text_msg(
+        call.message.chat.id,
+        state,
         '✏️ <b>أدخل البروكسي يدوياً:</b>\n\n'
         'الصيغة:\n'
         '<code>IP:PORT</code>\n'
@@ -410,8 +509,18 @@ async def post_select_manual_msg(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == 'tools:menu')
 async def tools_menu_cb(call: CallbackQuery, state: FSMContext):
+    # Preserve banner across state.clear()
+    prev_data = await state.get_data()
+    banner_msg_id = prev_data.get('banner_msg_id')
+    text_msg_id   = prev_data.get('text_msg_id')
     await state.clear()
-    await call.message.edit_text(
+    if banner_msg_id:
+        await state.update_data(banner_msg_id=banner_msg_id)
+    if text_msg_id:
+        await state.update_data(text_msg_id=text_msg_id)
+    await edit_text_msg(
+        call.message.chat.id,
+        state,
         "🛠️ <b>الأدوات</b>\n\n"
         "اختر القسم:",
         reply_markup=tools_menu()
@@ -420,10 +529,12 @@ async def tools_menu_cb(call: CallbackQuery, state: FSMContext):
 
 
 @dp.callback_query(F.data == 'tools:ads')
-async def tools_ads_cb(call: CallbackQuery):
+async def tools_ads_cb(call: CallbackQuery, state: FSMContext):
     row = db.get_user(call.from_user.id)
     sub = is_subscribed(row)
-    await call.message.edit_text(
+    await edit_text_msg(
+        call.message.chat.id,
+        state,
         "📢 <b>أدوات الإعلانات</b>\n\n"
         + ("اختر نوع الإعلان:" if sub else "❌ هذه الأدوات للمشتركين فقط.\nفعّل كودك أولاً."),
         reply_markup=ad_tools_menu(GATE_NAMES, sub)
@@ -432,10 +543,12 @@ async def tools_ads_cb(call: CallbackQuery):
 
 
 @dp.callback_query(F.data == 'tools:link')
-async def tools_link_cb(call: CallbackQuery):
+async def tools_link_cb(call: CallbackQuery, state: FSMContext):
     row = db.get_user(call.from_user.id)
     sub = is_subscribed(row)
-    await call.message.edit_text(
+    await edit_text_msg(
+        call.message.chat.id,
+        state,
         "🔗 <b>أدوات ربط و تسميع</b>\n\n"
         + ("اختر الأداة:" if sub else "❌ هذه الأدوات للمشتركين فقط. فعّل كودك أولاً."),
         reply_markup=link_tools_menu(sub)
@@ -453,11 +566,20 @@ async def bm_cards_start(call: CallbackQuery, state: FSMContext):
     if not is_subscribed(row):
         await call.answer('❌ هذه الأداة للمشتركين فقط. فعّل كود Redeem أولاً.', show_alert=True)
         return
+    # Preserve banner across state.clear()
+    prev_data = await state.get_data()
+    banner_msg_id = prev_data.get('banner_msg_id')
+    prev_text_id  = prev_data.get('text_msg_id')
     await state.clear()
+    if banner_msg_id:
+        await state.update_data(banner_msg_id=banner_msg_id)
+    if prev_text_id:
+        await state.update_data(text_msg_id=prev_text_id)
     tok = _new_session(call.from_user.id)
     await state.set_state(BMToolStates.waiting_proxy)
-    await state.update_data(_session_tok=tok, active_msg_id=call.message.message_id)
-    await call.message.edit_text(
+    text_msg_id = await edit_text_msg(
+        call.message.chat.id,
+        state,
         "💳 <b>تسميع البطاقات BM</b>\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📋 <b>خطوات العمل:</b>\n"
@@ -471,6 +593,7 @@ async def bm_cards_start(call: CallbackQuery, state: FSMContext):
         "🔽 <b>الخطوة 1:</b> اختر البروكسي",
         reply_markup=bm_proxy_keyboard()
     )
+    await state.update_data(_session_tok=tok, active_msg_id=text_msg_id)
     await call.answer()
 
 
@@ -484,7 +607,9 @@ async def bm_proxy_auto(call: CallbackQuery, state: FSMContext):
         return
     await state.update_data(bm_proxy=proxy)
     await state.set_state(BMToolStates.waiting_cookies)
-    await call.message.edit_text(
+    await edit_text_msg(
+        call.message.chat.id,
+        state,
         "✅ <b>البروكسي:</b> تم اختيار بروكسي من البوت تلقائياً\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔽 <b>الخطوة 2:</b> أرسل كوكيز Business Manager\n\n"
@@ -501,7 +626,9 @@ async def bm_proxy_skip(call: CallbackQuery, state: FSMContext):
         return
     await state.update_data(bm_proxy=None)
     await state.set_state(BMToolStates.waiting_cookies)
-    await call.message.edit_text(
+    await edit_text_msg(
+        call.message.chat.id,
+        state,
         "✅ <b>تم تخطي البروكسي</b>\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔽 <b>الخطوة 2:</b> أرسل كوكيز Business Manager",
@@ -515,7 +642,9 @@ async def bm_proxy_custom_prompt(call: CallbackQuery, state: FSMContext):
     if not await _check_session(call, state):
         return
     await state.set_state(BMToolStates.waiting_proxy)
-    await call.message.edit_text(
+    await edit_text_msg(
+        call.message.chat.id,
+        state,
         "✏️ <b>أدخل البروكسي يدوياً:</b>\n\n"
         "الصيغة:\n"
         "<code>IP:PORT</code>\n"
@@ -682,7 +811,9 @@ async def bm_confirm_cards(call: CallbackQuery, state: FSMContext):
         await call.answer("⚠️ لم تختر أي بطاقة!", show_alert=True)
         return
     await state.set_state(BMToolStates.waiting_interval)
-    await call.message.edit_text(
+    await edit_text_msg(
+        call.message.chat.id,
+        state,
         f"✅ <b>تم تحديد {len(selected)} بطاقة</b>\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔽 <b>الخطوة 6:</b> أدخل الفاصل الزمني بين كل بطاقة\n\n"
@@ -764,12 +895,14 @@ async def bm_interval_input(message: Message, state: FSMContext):
 # ── ربط بايبال (placeholder) ──
 
 @dp.callback_query(F.data == 'tool:paypal')
-async def tool_paypal(call: CallbackQuery):
+async def tool_paypal(call: CallbackQuery, state: FSMContext):
     row = db.get_user(call.from_user.id)
     if not is_subscribed(row):
         await call.answer('❌ هذه الأداة للمشتركين فقط. فعّل كود Redeem أولاً.', show_alert=True)
         return
-    await call.message.edit_text(
+    await edit_text_msg(
+        call.message.chat.id,
+        state,
         "🔗 <b>ربط بايبال</b>\n\n"
         "⏳ هذه الأداة قيد التطوير وستكون متاحة قريباً.",
         reply_markup=link_tools_menu(True)
