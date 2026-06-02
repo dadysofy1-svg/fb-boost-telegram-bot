@@ -11,6 +11,8 @@ from keyboards import (
 from states import NewDarkStates, GateConstants
 from gates.base_gate import BaseGate
 from services.new_dark_api import NewDarkAPIClient, GOAL_DISPLAY, COUNTRY_DISPLAY
+from services.proxy_manager import ProxyManager
+proxy_manager = ProxyManager('proxies.txt')
 
 
 class NewDarkGate(BaseGate):
@@ -46,9 +48,12 @@ class NewDarkGate(BaseGate):
         await call.answer("تم الإلغاء")
 
     # ────── Proxy Steps ──────
-    async def handle_proxy_auto(self, call, state):
-        proxy = None  # يمكنك إضافة proxy_manager.choose() هنا
-        await state.update_data(proxy=proxy)
+    async def handle_proxy_auto(self, call, state, proxy=None):
+        if proxy is None:
+            proxy_val = proxy_manager.choose() if proxy_manager else None
+        else:
+            proxy_val = proxy
+        await state.update_data(proxy=proxy_val)
         await state.set_state(NewDarkStates.waiting_cookies)
         await self._upd(call, state, "✅ <b>البروكسي:</b> تم اختياره\n\n━━━━━━━━━━━━━━━━━━━━\n🔽 <b>الخطوة 2:</b> أرسل الكوكيز", kb=back_to_proxy())
 
@@ -251,7 +256,7 @@ class NewDarkGate(BaseGate):
                 country=data.get("country","EG"),
                 age_min=data.get("age_min",18),
                 age_max=data.get("age_max",65),
-                gender=data.get("gender","all")
+                gender=data.get("gender") if data.get("gender") != "all" else None
             )
 
             self.cleanup_temp_files(img_path)
