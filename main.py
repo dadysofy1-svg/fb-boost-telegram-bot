@@ -84,6 +84,20 @@ def _mask_proxy(proxy: str) -> str:
     return proxy
 
 
+async def _smart_edit(message, text: str, **kwargs) -> None:
+    """
+    يعدل نص الرسالة أو الكابشن حسب نوعها (نص أو صورة).
+    يحل مشكلة edit_text على رسائل الصور (البانر).
+    """
+    try:
+        await message.edit_text(text, **kwargs)
+    except Exception:
+        try:
+            await message.edit_caption(caption=text, **kwargs)
+        except Exception:
+            pass
+
+
 def _new_session(user_id: int) -> str:
     """ينشئ session token جديد للمستخدم ويحفظه في الجدول."""
     tok = uuid.uuid4().hex[:10]
@@ -222,7 +236,8 @@ async def my_stats(call: CallbackQuery):
     sub = row['subscription_until'] if row else None
     joined = row['joined_at'] if row else '—'
     sub_text = sub if sub else '❌ بدون اشتراك'
-    await call.message.edit_text(
+    await _smart_edit(
+        call.message,
         f"📊 <b>إحصائياتك</b>\n\n"
         f"👤 الاسم: <b>{name}</b>\n"
         f"🆔 ID: <code>{call.from_user.id}</code>\n"
@@ -516,7 +531,8 @@ async def tools_menu_cb(call: CallbackQuery, state: FSMContext):
     prev = await state.get_data()
     await purge_tracked_bot_messages(call.message.bot, call.message.chat.id, prev.get('flow_msg_ids'))
     await state.clear()
-    await call.message.edit_text(
+    await _smart_edit(
+        call.message,
         "🛠️ <b>الأدوات</b>\n\n"
         "اختر القسم:",
         reply_markup=tools_menu()
@@ -528,7 +544,8 @@ async def tools_menu_cb(call: CallbackQuery, state: FSMContext):
 async def tools_ads_cb(call: CallbackQuery):
     row = db.get_user(call.from_user.id)
     sub = is_subscribed(row)
-    await call.message.edit_text(
+    await _smart_edit(
+        call.message,
         "📢 <b>أدوات الإعلانات</b>\n\n"
         + ("اختر نوع الإعلان:" if sub else "❌ هذه الأدوات للمشتركين فقط.\nفعّل كودك أولاً."),
         reply_markup=ad_tools_menu(GATE_NAMES, sub)
@@ -540,7 +557,8 @@ async def tools_ads_cb(call: CallbackQuery):
 async def tools_link_cb(call: CallbackQuery):
     row = db.get_user(call.from_user.id)
     sub = is_subscribed(row)
-    await call.message.edit_text(
+    await _smart_edit(
+        call.message,
         "🔗 <b>أدوات ربط و تسميع</b>\n\n"
         + ("اختر الأداة:" if sub else "❌ هذه الأدوات للمشتركين فقط. فعّل كودك أولاً."),
         reply_markup=link_tools_menu(sub)
@@ -563,12 +581,12 @@ async def bm_cards_start(call: CallbackQuery, state: FSMContext):
     await state.clear()
     tok = _new_session(call.from_user.id)
     await state.set_state(BMToolStates.waiting_proxy)
-    await state.update_data(
-        _session_tok=tok,
-        active_msg_id=call.message.message_id,
-        fixed_msg_id=call.message.message_id,
-    )
-    await call.message.edit_text(
+    # نحذف رسالة البانر (صورة) ونرسل رسالة نصية جديدة عشان خطوات BM تشتغل صح
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    new_msg = await call.message.answer(
         "💳 <b>تسميع البطاقات BM</b>\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📋 <b>خطوات العمل:</b>\n"
@@ -581,6 +599,11 @@ async def bm_cards_start(call: CallbackQuery, state: FSMContext):
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔽 <b>الخطوة 1:</b> اختر البروكسي",
         reply_markup=bm_proxy_keyboard()
+    )
+    await state.update_data(
+        _session_tok=tok,
+        active_msg_id=new_msg.message_id,
+        fixed_msg_id=new_msg.message_id,
     )
     await call.answer()
 
