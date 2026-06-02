@@ -1293,11 +1293,16 @@ async def nd_gl(call:CallbackQuery,state:FSMContext):
     if not await _check_session(call,state): return
     await new_dark_gate.handle_goal(call,state,call.data.split(':',2)[2]); await call.answer()
 
+@dp.callback_query(F.data == 'image:skip', NewDarkStates.waiting_image)
+async def nd_image_skip(call:CallbackQuery,state:FSMContext):
+    if not await _check_session(call,state): return
+    await new_dark_gate.handle_image_skip(call,state); await call.answer()
+
 @dp.callback_query(F.data.startswith('nd:age:'),NewDarkStates.waiting_age)
 async def nd_age_cb(call:CallbackQuery,state:FSMContext):
     if not await _check_session(call,state): return
     await new_dark_gate.handle_age(call,state)
-    await call.answer()
+    await call.answer("✅")
 
 @dp.message(NewDarkStates.waiting_age)
 async def nd_age(m:Message,state:FSMContext):
@@ -1307,7 +1312,7 @@ async def nd_age(m:Message,state:FSMContext):
 async def nd_gender_cb(call:CallbackQuery,state:FSMContext):
     if not await _check_session(call,state): return
     await new_dark_gate.handle_gender(call,state,call.data.split(':',2)[2])
-    await call.answer()
+    await call.answer("✅")
 
 @dp.message(NewDarkStates.waiting_image)
 async def nd_im(m:Message,state:FSMContext): await new_dark_gate.handle_image(m,state)
@@ -1324,7 +1329,7 @@ async def nd_dy(m:Message,state:FSMContext): await new_dark_gate.handle_days(m,s
 @dp.callback_query(F.data.startswith('nd:confirm:'),NewDarkStates.waiting_confirm)
 async def nd_cf(call:CallbackQuery,state:FSMContext):
     if not await _check_session(call,state): return
-    await new_dark_gate.handle_confirm(call,state); await call.answer()
+    await new_dark_gate.handle_confirm(call,state); await call.answer("🔄")
 
 # ──────────────────────────────────────────────
 #  Main entry

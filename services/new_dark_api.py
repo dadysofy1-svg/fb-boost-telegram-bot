@@ -254,86 +254,87 @@ class NewDarkAPIClient:
         }
         mime = mime_map.get(img_ext, "image/jpeg")
 
-        endpoints = [
-            (f"{FB_URL}/ajax/ads/upload_partner_creative_image/", "partner_creative"),
-            (f"{FB_URL}/ads/creative/upload/",                    "creative_photo"),
-            (f"{FB_URL}/ajax/creatives/dismap_upload.php",        "dismap_upload"),
-            (f"{FB_URL}/ajax/ads/async_image_upload.php",         "async_upload"),
-        ]
+        # استخراج lsd من الصفحة
+        lsd = self._dtsg[:16] if len(self._dtsg) >= 16 else "KJmm"
+        
+        try:
+            async with self._client() as c:
+                try:
+                    init_r = await c.get(
+                        f"{FB_URL}/adsmanager/",
+                        headers={"User-Agent": self._profile["ua"]},
+                        cookies=self.cookies_dict,
+                        timeout=30,
+                    )
+                    m_lsd = re.search(r'"LSD"[^}]+?"token":"([^"]+)"', init_r.text)
+                    if m_lsd:
+                        lsd = m_lsd.group(1)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
-        for url, ep_name in endpoints:
+        # قائمة الـ endpoints للرفع (من الأحدث إلى الأقدم)
+        endpoints = [
+            f"{FB_URL}/ajax/react_composer/attachments/photo/upload",
+        ]
+        
+        for url in endpoints:
             try:
                 async with self._client() as c:
+                    body = {
+                        "av": self.user_id,
+                        "__user": self.user_id,
+                        "__a": "1",
+                        "fb_dtsg": self._dtsg,
+                        "lsd": lsd,
+                        "source": "composer",
+                    }
+                    
                     r = await c.post(
                         url,
+                        data=body,
                         files={
-                            "fb_dtsg": (None, self._dtsg),
-                            "av":      (None, self.user_id),
-                            "act":     (None, clean_act),
-                            "__a":     (None, "1"),
-                            "file":    (filename, image_bytes, mime),
+                            "file": (filename, image_bytes, mime),
                         },
                         headers={
                             "User-Agent": self._profile["ua"],
                             "Referer":    f"{FB_URL}/adsmanager/",
                             "Origin":     FB_URL,
+                            "Accept":     "*/*",
                         },
                         cookies=self.cookies_dict,
                     )
 
                     if "login" in str(r.url).lower():
-                        return {"success": False, "error": "الكوكيز انتهت"}
-
+                        return {"success": False, "error": "الكوكيز انتهت أثناء رفع الصورة - جرب تحديث الكوكيز"}
+                    
+                    if r.status_code == 404:
+                        continue
+                    
                     raw = r.text.strip()
                     if raw.startswith("for(;;);"):
                         raw = raw[8:].strip()
-
-                    if raw.startswith("<!") or raw.startswith("<html") or raw.startswith("<!--"):
-                        continue
-                    if len(raw) > 100 and raw[0] not in ('{', '['):
-                        m = re.search(r'\{.*\}', raw, re.DOTALL)
-                        if not m:
-                            continue
-                        raw = m.group()
 
                     try:
                         data = json.loads(raw)
                     except Exception:
                         continue
 
-                    def extract_hash(d):
-                        return (
-                            d.get("hash") or d.get("image_hash") or d.get("id") or
-                            d.get("upload_id") or d.get("uid")
-                        )
-
-                    imgs = (
-                        data.get("images") or
-                        data.get("payload", {}).get("images") or
-                        data.get("data", {}).get("images") or
-                        data.get("result")
+                    photo_id = (
+                        data.get("payload", {}).get("photoID") or
+                        data.get("photoID") or
+                        data.get("image_hash") or
+                        data.get("hash")
                     )
-
-                    if isinstance(imgs, dict) and imgs:
-                        for k, v in imgs.items():
-                            h = (
-                                extract_hash(v) if isinstance(v, dict)
-                                else (v if isinstance(v, str) else None)
-                            )
-                            if h and len(str(h)) > 3:
-                                return {"success": True, "image_hash": h}
-
-                    if isinstance(data, dict):
-                        h = extract_hash(data)
-                        if not h and isinstance(data.get("result"), dict):
-                            h = extract_hash(data["result"])
-                        if h:
-                            return {"success": True, "image_hash": h}
+                    
+                    if photo_id and len(str(photo_id)) > 3:
+                        return {"success": True, "image_hash": str(photo_id)}
 
             except Exception:
                 continue
 
-        return {"success": False, "error": "فشل رفع الصورة - جرب صيغ أخرى (JPG/PNG)"}
+        return {"success": False, "error": "فشل رفع الصورة - جرب صيغ أخرى (JPG/PNG) أو تحقق من صلاحية الكوكيز"}
 
     async def create_and_pause(
         self,
@@ -375,15 +376,43 @@ class NewDarkAPIClient:
             "age_max": age_max,
             "geo_locations": {
                 "countries":       [country],
-                "location_types":  ["home", "recent"],
             },
-            "targeting_optimization": "expansion_all",
-            "targeting_automation":   {"advantage_audience": 1},
         }
         if gender in ("MALE", "FEMALE"):
             tgt_dict["genders"] = [1] if gender == "MALE" else [2]
 
         tgt = json.dumps(tgt_dict, separators=(",", ":"))
+
+        creative_spec = {
+            "degrees_of_freedom_spec": {
+                "creative_features_spec": {
+                    "product_extensions": {
+                        "action_metadata": {"type": "UNKOWN"},
+                        "enroll_status":   "OPT_OUT",
+                    }
+                },
+                "degrees_of_freedom_type": "USER_ENROLLED_LWI_ACO",
+            },
+            "object_story_spec": {
+                "page_id": page_id,
+            },
+        }
+        
+        # استخدام photo_data إذا كان هناك صورة، وإلا link_data فقط
+        if image_hash:
+            creative_spec["object_story_spec"]["photo_data"] = {
+                "image_hash": image_hash,
+                "message":    message,
+            }
+            creative_spec["object_story_spec"]["link_data"] = {
+                "call_to_action": cta,
+                "message":        message,
+            }
+        else:
+            creative_spec["object_story_spec"]["link_data"] = {
+                "call_to_action": cta,
+                "message":        message,
+            }
 
         variables = {
             "input": {
@@ -418,26 +447,7 @@ class NewDarkAPIClient:
                     "targeting_spec_string": tgt,
                     "adgroup_specs": [
                         {
-                            "creative": {
-                                "degrees_of_freedom_spec": {
-                                    "creative_features_spec": {
-                                        "product_extensions": {
-                                            "action_metadata": {"type": "UNKOWN"},
-                                            "enroll_status":   "OPT_OUT",
-                                        }
-                                    },
-                                    "degrees_of_freedom_type": "USER_ENROLLED_LWI_ACO",
-                                },
-                                "object_story_spec": {
-                                    "link_data": {
-                                        "call_to_action": cta,
-                                        "image_hash":     image_hash,
-                                        "link":           pl,
-                                        "message":        message,
-                                    },
-                                    "page_id": page_id,
-                                },
-                            }
+                            "creative": creative_spec,
                         }
                     ],
                     "objective": cfg["objective"],
@@ -452,13 +462,20 @@ class NewDarkAPIClient:
             }
         }
 
-        cr = await self._gql(variables, "CreateBoostedComponent")
-        if not cr["success"]:
-            return cr
+        mutation_names = ["CreateBoostedComponent", "AdsCreationMutation", "BoostedComponentMutation"]
+        cr = None
+        for mut_name in mutation_names:
+            cr = await self._gql(variables, mut_name)
+            if cr["success"]:
+                break
+        
+        if not cr or not cr["success"]:
+            return cr if cr else {"success": False, "error": "فشل الاتصال بـ GraphQL"}
 
         cid = (
             cr.get("data", {}).get("create_boosted_component", {}).get("campaign", {}).get("id")
             or cr.get("data", {}).get("create_boosted_component", {}).get("id")
+            or cr.get("data", {}).get("ads_creation", {}).get("campaign", {}).get("id")
         )
         if not cid:
             return {
@@ -491,7 +508,10 @@ class NewDarkAPIClient:
                 r = await c.post(
                     f"{FB_URL}/api/graphql/",
                     data=body,
-                    headers=self._hdrs(),
+                    headers={
+                        **self._hdrs(),
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
                     cookies=self.cookies_dict,
                 )
                 if "login" in str(r.url).lower():
