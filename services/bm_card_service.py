@@ -124,7 +124,7 @@ class BMCardService:
                                        cookies=self.cookies_dict)
                     text = resp.text
                     url_lower = str(resp.url).lower()
-                    if 'login' in url_lower or 'checkpoint' in text.lower():
+                    if 'login' in url_lower or 'checkpoint' in url_lower:
                         continue
                     tok = _extract_dtsg(text)
                     if tok:
